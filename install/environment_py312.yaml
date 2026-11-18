@@ -54,3 +54,6 @@ dependencies:
       - h5py
       - fire
       - MDAnalysis
+      # runtime deps used by molfm.tasks / molfm.logging but missing from this file
+      - swanlab
+      - aim

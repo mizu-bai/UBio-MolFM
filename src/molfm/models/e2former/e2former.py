@@ -993,7 +993,7 @@ class E2former(torch.nn.Module):
             wigner = wigner.to(dtype=tensortype)
             wigner_inv = wigner_inv.to(dtype=tensortype)
 
-            if torch.any(batched_data["pbc"]):
+            if batched_data.get("pbc_flag", False):
                 wigner_exp,wigner_inv_exp = eulers_to_wigner(
                     init_edge_rot_euler_angles(f_exp_node_pos_wigner,training = self.training),
                     0,

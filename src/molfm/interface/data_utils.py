@@ -79,6 +79,12 @@ def dict_to_model_input(
 
     out_batch['data_name'] = [data_name]
 
+    # Python-side periodicity flag for torch.compile: torch.any() on the GPU
+    # pbc tensor is a data-dependent branch and graph-breaks the compiled
+    # model (e2former reads this flag instead). Semantics mirror the original
+    # torch.any(batched_data["pbc"]) evaluated over the whole batch.
+    out_batch['pbc_flag'] = bool(torch.any(out_batch['pbc']).item())
+
     return out_batch
 
 

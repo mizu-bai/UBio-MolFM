@@ -178,47 +178,39 @@ class sph_fromxyz(torch.nn.Module):
 
 # follow fairchem 2.4.0 and e3nn 0.4.0
 # quick fix: for some special case e.g. [0,0,0],[0,1,0],[0,x,0]
-@torch.compiler.disable
+# NOTE: rewritten with static-shape ops so torch.compile can trace it. The
+# original masked in-place indexing (tensor[mask] = ...) lowers to aten.nonzero
+# and forced graph breaks, leaving the whole wigner block in eager mode.
+# Numerics are equivalent to the original:
+#   - distances below `ts` are reset to 1 (the original gated the reset on
+#     torch.min(...) < ts, which is a no-op gate when no edge is short);
+#   - edges that are too short or sit on the poles get detached angles,
+#     expressed with torch.where instead of masked in-place assignment.
 def init_edge_rot_euler_angles(edge_distance_vec,training = True,ts = 0.00001):
-    edge_vec_0 = edge_distance_vec
-    edge_vec_0_distance = torch.norm(edge_vec_0,dim = 1) #torch.sqrt(torch.sum(edge_vec_0**2, dim=1))
-
-    # Make sure the atoms are far enough apart
-    # assert torch.min(edge_vec_0_distance) < 0.0001
-    mask = edge_vec_0_distance < ts
-    if len(edge_vec_0_distance) > 0 and torch.min(edge_vec_0_distance) < ts:
-        logger.error(f"Error edge_vec_0_distance: {torch.min(edge_vec_0_distance)} - > reset to 1")
-        edge_vec_0_distance = torch.where(
-            edge_vec_0_distance < ts,
-            1,
-            edge_vec_0_distance
-        )
-    #     mask = 
-    # else:
-    #     # are we standing at the north pole
-    #     mask = xyz[:, 1].abs().isclose(xyz.new_ones(1))
+    raw_distance = torch.norm(edge_distance_vec, dim = 1)
+    mask_short = raw_distance < ts
+    edge_vec_0_distance = torch.where(
+        mask_short,
+        torch.ones_like(raw_distance),
+        raw_distance
+    )
 
     # make unit vectors
-    xyz = edge_vec_0 / (edge_vec_0_distance.view(-1, 1))
-    mask = mask + xyz[:, 1].abs().isclose(xyz.new_ones(1))
+    xyz = edge_distance_vec / (edge_vec_0_distance.view(-1, 1))
 
-    # compute alpha and beta
+    # edges that are too short or are standing at the north pole
+    mask = mask_short | xyz[:, 1].abs().isclose(xyz.new_ones(1))
 
-    # latitude (beta)
-    beta = xyz.new_zeros(xyz.shape[0])
-    beta[~mask] = torch.acos(xyz[~mask, 1])
-    beta[mask] = torch.acos(xyz[mask, 1]).detach()
-
-    # longitude (alpha)
-    alpha = torch.zeros_like(beta)
-    alpha[~mask] = torch.atan2(xyz[~mask, 0], xyz[~mask, 2])
-    alpha[mask] = torch.atan2(xyz[mask, 0], xyz[mask, 2]).detach()
+    # latitude (beta) and longitude (alpha); detach on degenerate edges
+    beta = torch.acos(xyz[:, 1])
+    beta = torch.where(mask, beta.detach(), beta)
+    alpha = torch.atan2(xyz[:, 0], xyz[:, 2])
+    alpha = torch.where(mask, alpha.detach(), alpha)
     if training:
         # random gamma (roll)
         gamma = torch.rand_like(alpha) * 2 * torch.pi
-        # gamma = torch.zeros_like(alpha)
     else:
-        gamma = torch.zeros_like(alpha) #* 2 * torch.pi
+        gamma = torch.zeros_like(alpha)
 
     # intrinsic to extrinsic swap
     return -gamma, -beta, -alpha
